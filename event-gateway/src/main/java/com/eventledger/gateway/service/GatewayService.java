@@ -34,6 +34,20 @@ public class GatewayService {
             return existing.get();
         }
 
+        GatewayEvent newEvent = new GatewayEvent(
+                request.eventId(),
+                request.accountId(),
+                request.type(),
+                request.amount(),
+                request.currency(),
+                request.eventTimestamp(),
+                Instant.now(),
+                "PENDING"
+        );
+
+        // Persist as PENDING first so it is safely saved in our outbox
+        GatewayEvent savedEvent = repository.saveAndFlush(newEvent);
+
         TransactionRequest txRequest = new TransactionRequest(
                 request.eventId(),
                 request.type(),
@@ -42,20 +56,21 @@ public class GatewayService {
                 request.eventTimestamp()
         );
 
-        // Call Account Service directly (which is proxy-protected by Circuit Breaker)
-        accountClient.applyTransaction(request.accountId(), txRequest);
+        try {
+            // Attempt to forward transaction to Account Service
+            accountClient.applyTransaction(request.accountId(), txRequest);
+            
+            // If successful, update status to PROCESSED
+            savedEvent.setStatus("PROCESSED");
+            repository.save(savedEvent);
+            log.info("Successfully processed event: {}", request.eventId());
+        } catch (Exception e) {
+            // Catch exception to prevent transaction rollback; keeps event in PENDING state
+            log.warn("Account Service is unreachable. Event {} queued locally in H2 database. Reason: {}", 
+                    request.eventId(), e.getMessage());
+        }
 
-        GatewayEvent newEvent = new GatewayEvent(
-                request.eventId(),
-                request.accountId(),
-                request.type(),
-                request.amount(),
-                request.currency(),
-                request.eventTimestamp(),
-                Instant.now()
-        );
-
-        return repository.save(newEvent);
+        return savedEvent;
     }
 
     public AccountBalanceResponse getBalance(String accountId) {

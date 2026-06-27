@@ -5,6 +5,7 @@ import com.eventledger.gateway.dto.AccountDetailsResponse;
 import com.eventledger.gateway.dto.TransactionRequest;
 import com.eventledger.gateway.exception.AccountServiceUnavailableException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,7 @@ public class AccountClient {
     }
 
     @CircuitBreaker(name = "accountService", fallbackMethod = "applyTransactionFallback")
+    @Retry(name = "accountService")
     public void applyTransaction(String accountId, TransactionRequest request) {
         log.info("Sending transaction to Account Service for account {}", accountId);
         restClient.post()
@@ -39,6 +41,7 @@ public class AccountClient {
     }
 
     @CircuitBreaker(name = "accountService", fallbackMethod = "getBalanceFallback")
+    @Retry(name = "accountService")
     public AccountBalanceResponse getBalance(String accountId) {
         log.info("Fetching balance from Account Service for account {}", accountId);
         return restClient.get()
@@ -52,6 +55,7 @@ public class AccountClient {
     }
 
     @CircuitBreaker(name = "accountService", fallbackMethod = "getAccountDetailsFallback")
+    @Retry(name = "accountService")
     public AccountDetailsResponse getAccountDetails(String accountId) {
         log.info("Fetching details from Account Service for account {}", accountId);
         return restClient.get()
@@ -66,17 +70,17 @@ public class AccountClient {
 
     // Fallbacks
     public void applyTransactionFallback(String accountId, TransactionRequest request, Throwable t) {
-        log.error("Circuit Breaker Fallback triggered for applyTransaction. Error: {}", t.getMessage());
+        log.error("Circuit Breaker / Retry Fallback triggered for applyTransaction. Error: {}", t.getMessage());
         throw new AccountServiceUnavailableException("Account service is currently unavailable. Transaction could not be processed.", t);
     }
 
     public AccountBalanceResponse getBalanceFallback(String accountId, Throwable t) {
-        log.error("Circuit Breaker Fallback triggered for getBalance. Error: {}", t.getMessage());
+        log.error("Circuit Breaker / Retry Fallback triggered for getBalance. Error: {}", t.getMessage());
         throw new AccountServiceUnavailableException("Account service is unreachable. Unable to fetch balance.", t);
     }
 
     public AccountDetailsResponse getAccountDetailsFallback(String accountId, Throwable t) {
-        log.error("Circuit Breaker Fallback triggered for getAccountDetails. Error: {}", t.getMessage());
+        log.error("Circuit Breaker / Retry Fallback triggered for getAccountDetails. Error: {}", t.getMessage());
         throw new AccountServiceUnavailableException("Account service is unreachable. Unable to fetch account details.", t);
     }
 }

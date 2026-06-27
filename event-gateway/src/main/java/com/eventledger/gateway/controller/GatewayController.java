@@ -5,6 +5,7 @@ import com.eventledger.gateway.dto.AccountBalanceResponse;
 import com.eventledger.gateway.dto.AccountDetailsResponse;
 import com.eventledger.gateway.dto.EventRequest;
 import com.eventledger.gateway.service.GatewayService;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.Valid;
@@ -38,19 +39,22 @@ public class GatewayController {
     }
 
     @PostMapping("/events")
+    @RateLimiter(name = "gatewayLimiter")
     public ResponseEntity<GatewayEvent> submitEvent(@Valid @RequestBody EventRequest request) {
         log.info("Received event submission: {}", request.eventId());
         requestCounter.increment();
         
-        // Check if event already exists before submitting
         boolean existsBefore = gatewayService.getEventById(request.eventId()).isPresent();
         GatewayEvent result = gatewayService.submitEvent(request);
         
         if (existsBefore) {
             log.info("Returning 200 OK for duplicate event: {}", request.eventId());
             return ResponseEntity.ok(result);
+        } else if ("PENDING".equals(result.getStatus())) {
+            log.info("Returning 202 Accepted for locally queued event: {}", request.eventId());
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(result);
         } else {
-            log.info("Returning 201 Created for new event: {}", request.eventId());
+            log.info("Returning 201 Created for successfully processed event: {}", request.eventId());
             return ResponseEntity.status(HttpStatus.CREATED).body(result);
         }
     }
@@ -100,5 +104,14 @@ public class GatewayController {
             status.put("error", e.getMessage());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(status);
         }
+    }
+
+    @ExceptionHandler(io.github.resilience4j.ratelimiter.RequestNotPermitted.class)
+    public ResponseEntity<Map<String, String>> handleRateLimit(io.github.resilience4j.ratelimiter.RequestNotPermitted e) {
+        log.warn("Rate limit exceeded on events endpoint");
+        Map<String, String> response = new HashMap<>();
+        response.put("error", "Too Many Requests");
+        response.put("message", "Rate limit exceeded. Please try again later.");
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(response);
     }
 }

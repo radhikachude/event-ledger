@@ -9,4 +9,5 @@ import java.util.List;
 @Repository
 public interface GatewayEventRepository extends JpaRepository<GatewayEvent, String> {
     List<GatewayEvent> findByAccountIdOrderByEventTimestampAsc(String accountId);
+    List<GatewayEvent> findByStatusOrderByEventTimestampAsc(String status);
 }

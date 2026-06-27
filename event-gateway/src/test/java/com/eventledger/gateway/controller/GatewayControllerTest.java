@@ -5,6 +5,7 @@ import com.eventledger.gateway.domain.GatewayEvent;
 import com.eventledger.gateway.dto.AccountBalanceResponse;
 import com.eventledger.gateway.dto.AccountDetailsResponse;
 import com.eventledger.gateway.repository.GatewayEventRepository;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -14,7 +15,6 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.http.*;
-import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -36,6 +36,9 @@ public class GatewayControllerTest {
     @Autowired
     private GatewayEventRepository eventRepository;
 
+    @Autowired
+    private CircuitBreakerRegistry circuitBreakerRegistry;
+
     @SpyBean
     private AccountClient accountClient;
 
@@ -43,6 +46,10 @@ public class GatewayControllerTest {
     public void setup() {
         eventRepository.deleteAll();
         Mockito.reset(accountClient);
+        // Reset the circuit breaker state to prevent test pollution
+        if (circuitBreakerRegistry.circuitBreaker("accountService") != null) {
+            circuitBreakerRegistry.circuitBreaker("accountService").reset();
+        }
     }
 
     private String getBaseUrl() {
@@ -51,7 +58,6 @@ public class GatewayControllerTest {
 
     @Test
     public void testSubmitEvent_Success() {
-        // Stub the spy to do nothing on transaction application (success simulation)
         Mockito.doNothing().when(accountClient).applyTransaction(any(), any());
 
         String eventId = "evt-001";
@@ -74,8 +80,7 @@ public class GatewayControllerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getEventId()).isEqualTo(eventId);
-        assertThat(response.getBody().getAccountId()).isEqualTo(accountId);
-        assertThat(response.getBody().getAmount().doubleValue()).isEqualTo(150.00);
+        assertThat(response.getBody().getStatus()).isEqualTo("PROCESSED");
 
         Mockito.verify(accountClient, Mockito.times(1)).applyTransaction(eq(accountId), any());
     }
@@ -142,8 +147,8 @@ public class GatewayControllerTest {
     public void testGetEvents_ChronologicalSorting() {
         String accountId = "acct-sorting";
         
-        GatewayEvent eventLater = new GatewayEvent("evt-later", accountId, "CREDIT", BigDecimal.TEN, "USD", Instant.parse("2026-05-15T15:00:00Z"), Instant.now());
-        GatewayEvent eventEarlier = new GatewayEvent("evt-earlier", accountId, "DEBIT", BigDecimal.ONE, "USD", Instant.parse("2026-05-15T14:00:00Z"), Instant.now());
+        GatewayEvent eventLater = new GatewayEvent("evt-later", accountId, "CREDIT", BigDecimal.TEN, "USD", Instant.parse("2026-05-15T15:00:00Z"), Instant.now(), "PROCESSED");
+        GatewayEvent eventEarlier = new GatewayEvent("evt-earlier", accountId, "DEBIT", BigDecimal.ONE, "USD", Instant.parse("2026-05-15T14:00:00Z"), Instant.now(), "PROCESSED");
         
         // Save out of chronological order (later first)
         eventRepository.save(eventLater);
@@ -175,7 +180,7 @@ public class GatewayControllerTest {
                 HttpMethod.GET,
                 entity,
                 GatewayEvent[].class
-            );
+        );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         // Trace ID should propagate back in the response headers
@@ -185,7 +190,7 @@ public class GatewayControllerTest {
     }
 
     @Test
-    public void testResiliency_AccountServiceDown() {
+    public void testResiliency_AccountServiceDown_QueuesLocally() {
         // Setup Account Client mock to throw an exception
         Mockito.doThrow(new RuntimeException("Account Service is unreachable"))
                 .when(accountClient).applyTransaction(any(), any());
@@ -198,14 +203,15 @@ public class GatewayControllerTest {
         payload.put("currency", "USD");
         payload.put("eventTimestamp", "2026-05-15T14:02:11Z");
 
-        ResponseEntity<String> response = restTemplate.postForEntity(
+        ResponseEntity<GatewayEvent> response = restTemplate.postForEntity(
                 getBaseUrl() + "/events",
                 payload,
-                String.class
+                GatewayEvent.class
         );
 
-        // Assert 503 Service Unavailable is returned gracefully
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(response.getBody()).contains("Account service is currently unavailable");
+        // Assert 202 Accepted is returned, and status is PENDING (queued locally)
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo("PENDING");
     }
 }

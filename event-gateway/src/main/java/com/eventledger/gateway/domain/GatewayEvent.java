@@ -33,10 +33,13 @@ public class GatewayEvent {
     @Column(name = "received_at", nullable = false)
     private Instant receivedAt;
 
+    @Column(name = "status", nullable = false)
+    private String status; // PENDING, PROCESSED
+
     public GatewayEvent() {
     }
 
-    public GatewayEvent(String eventId, String accountId, String type, BigDecimal amount, String currency, Instant eventTimestamp, Instant receivedAt) {
+    public GatewayEvent(String eventId, String accountId, String type, BigDecimal amount, String currency, Instant eventTimestamp, Instant receivedAt, String status) {
         this.eventId = eventId;
         this.accountId = accountId;
         this.type = type;
@@ -44,6 +47,7 @@ public class GatewayEvent {
         this.currency = currency;
         this.eventTimestamp = eventTimestamp;
         this.receivedAt = receivedAt;
+        this.status = status;
     }
 
     // Getters and Setters
@@ -67,4 +71,7 @@ public class GatewayEvent {
 
     public Instant getReceivedAt() { return receivedAt; }
     public void setReceivedAt(Instant receivedAt) { this.receivedAt = receivedAt; }
+
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 }
